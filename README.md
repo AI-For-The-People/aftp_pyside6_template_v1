@@ -26,10 +26,6 @@ Instead, it helps you **link out** to official sources and interact with tools y
   *Note:* individual models in the Ollama Library (e.g., Llama 3) may have **additional licenses/terms**.  
   The hub shows a one-time notice before your first model pull and links you to the Ollama website.
 
-- **General guidance**: If you redistribute someone else’s binaries or code, include their license per the terms.  
-  If you’re only linking to and invoking software the user installs (like this hub does), it’s sufficient to  
-  direct users to the vendor’s site for installers and current license terms.
-
 - **Project license**: See this repository’s own `LICENSE` file for AFTP Hub’s license.
 
 If you add more third-party tools in derived apps, keep the same pattern:
@@ -40,9 +36,16 @@ If you add more third-party tools in derived apps, keep the same pattern:
 ## 🚀 Quick Start
 
 ```bash
+# from the project root
 # Create the core venv
 ./scripts/setup_venv_core.sh
 source venvs/core/bin/activate
 
 # Launch the hub
 python3 -m app
+```
+
+```powershell
+# from the project root
+.\scripts\run.ps1
+```
