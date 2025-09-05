@@ -1,0 +1,126 @@
+{
+  "name": "default",
+  "model": "deepseek-coder:6.7b-instruct",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hi there"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 119)"
+    },
+    {
+      "role": "user",
+      "content": "hi there"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 97)"
+    },
+    {
+      "role": "user",
+      "content": "hi there"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 97)"
+    },
+    {
+      "role": "user",
+      "content": "what are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 96)"
+    },
+    {
+      "role": "user",
+      "content": "what are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 96)"
+    },
+    {
+      "role": "user",
+      "content": "what are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 102)"
+    },
+    {
+      "role": "user",
+      "content": "what are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 102)"
+    },
+    {
+      "role": "user",
+      "content": "what are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 102)"
+    },
+    {
+      "role": "user",
+      "content": "who are you"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 114)"
+    },
+    {
+      "role": "user",
+      "content": "who are you"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 108)"
+    },
+    {
+      "role": "user",
+      "content": "who are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 115)"
+    },
+    {
+      "role": "user",
+      "content": "who are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 96)"
+    },
+    {
+      "role": "user",
+      "content": "who are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 96)"
+    },
+    {
+      "role": "user",
+      "content": "who are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "Extra data: line 2 column 1 (char 96)"
+    },
+    {
+      "role": "user",
+      "content": "who are you?"
+    },
+    {
+      "role": "assistant",
+      "content": "I am an AI Programming Assistant based on the Deepseek Coder model developed by Deepseek Company. I'm here to help users with computer programming and related topics. How can I assist you today?\n"
+    }
+  ]
+}

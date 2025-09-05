@@ -1,0 +1,45 @@
+# --- Python basics ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dylib
+*.dll
+*.egg-info/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Environments ---
+.venv/
+venv/
+env/
+venvs/
+.vscode/
+.idea/
+
+# --- Build / dist / cache ---
+build/
+dist/
+wheelhouse/
+pip-wheel-metadata/
+*.log
+
+# --- Qt/PySide generated/cache ---
+*.qrc.py
+*.qt.ui.py
+*.qmlc
+*.jsc
+
+# --- App specifics (adjust if needed) ---
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- Large local-only stuff (do not commit) ---
+/models/
+/data/raw/
+/checkpoints/

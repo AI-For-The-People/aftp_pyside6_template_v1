@@ -1,0 +1,15 @@
+{
+  "runtimes": {
+    "core": "venvs/core",
+    "ollama": "venvs/ollama",
+    "llm_hf": "venvs/llm_hf",
+    "image": "venvs/image",
+    "embeddings": "venvs/embeddings",
+    "indexer": "venvs/indexer",
+    "ocr_vision": "venvs/ocr_vision",
+    "stt": "venvs/stt",
+    "tts": "venvs/tts",
+    "mamba2": "venvs/mamba2"
+  },
+  "show_licenses_on_start": false
+}
