@@ -1,8 +1,12 @@
+param([string]$Python = "python")
 $proj = Split-Path -Parent $PSScriptRoot
 $venv = Join-Path $proj "venvs\llm_hf"
-$py = "python"
-& $py -m venv $venv
-& "$venv\Scripts\python.exe" -m pip install --upgrade pip wheel setuptools
-& "$venv\Scripts\python.exe" -m pip install --upgrade transformers accelerate safetensors
-try { & "$venv\Scripts\python.exe" -m pip install --upgrade bitsandbytes optimum } catch {}
-Write-Host "Activate:`n  .\venvs\llm_hf\Scripts\Activate.ps1"
+
+Write-Host "[AFTP] Creating venv: $venv"
+& $Python -m venv $venv
+& "$venv\Scripts\python.exe" -m pip install --upgrade pip setuptools wheel
+
+# --- packages ---
+& "$venv\Scripts\python.exe" -m pip install transformers accelerate safetensors
+
+Write-Host "[AFTP] Installed into venv 'llm_hf'."

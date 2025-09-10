@@ -1,14 +1,15 @@
 from __future__ import annotations
 import os, webbrowser
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QProcess, QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QTabWidget, QPushButton, QHBoxLayout,
     QComboBox, QRadioButton, QGroupBox, QFormLayout, QLineEdit, QTableWidget, QTableWidgetItem,
-    QMessageBox, QPlainTextEdit, QSplitter, QAbstractItemView, QStatusBar, QMenuBar, QMenu,
+    QMessageBox, QPlainTextEdit, QSplitter, QAbstractItemView, QStatusBar, QMenuBar, QMenu, QProgressDialog, QTextEdit,
     QDialog, QDialogButtonBox
 )
 from app.core.theme import ThemeManager, SCHEMES
-from app.core.venv_tools import EXPECTED, is_created, validate
+from app.core.venv_tools import EXPECTED, is_created, validate, details
+from app.core.runtime_registry import rescan_and_update, read_registry
 from app.core.ollama_tools import (
     server_ok, list_models, pull_model, delete_model, prompt,
     list_conversations, load_conversation, save_conversation,
@@ -111,55 +112,123 @@ class MainWindow(QMainWindow):
         self.theme.set_custom_accent(primary, secondary or None)
 
     # ---- Runtimes ----
+    
+    
     def _runtimes_tab(self) -> QWidget:
         w = QWidget(); lay = QVBoxLayout(w)
-        desc = QLabel("Create/validate venvs. Buttons run scripts under <code>scripts/</code>.")
+        desc = QLabel("Create/validate venvs. Progress and logs will show while installing. Use Details to see exact import status/version.")
         desc.setWordWrap(True); lay.addWidget(desc)
 
-        table = QTableWidget(0, 4); table.setHorizontalHeaderLabels(["Name","Status","Create/Update","Validate"])
+        table = QTableWidget(0, 6)
+        table.setHorizontalHeaderLabels(["Name","Status","Create/Update","Validate","Details","Log"])
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._venv_table = table
 
-        names = list(EXPECTED.keys()) + ["mamba2"]; table.setRowCount(len(names))
-        def mk_btn(label, fn): b = QPushButton(label); b.clicked.connect(fn); return b
+        names = list(EXPECTED.keys()) + ["mamba2"]
+        table.setRowCount(len(names))
+
+        self._op_log = QTextEdit(); self._op_log.setReadOnly(True); self._op_log.hide()
+
+        from PySide6.QtWidgets import QProgressDialog
+        from PySide6.QtCore import QProcess, Qt
+
+        def run_script(script_path: str, on_done):
+            dlg = QProgressDialog("Working…", "", 0, 0, self)
+            dlg.setWindowTitle("Installing / Updating")
+            dlg.setCancelButton(None)
+            dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+            dlg.show()
+            proc = QProcess(self)
+            proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+            if os.name == "nt":
+                proc.setProgram("powershell"); proc.setArguments(["-ExecutionPolicy","Bypass","-File", script_path])
+            else:
+                proc.setProgram("bash"); proc.setArguments([script_path])
+            proc.readyReadStandardOutput.connect(lambda: self._op_log.insertPlainText(proc.readAllStandardOutput().data().decode("utf-8","ignore")))
+            proc.readyReadStandardError.connect(lambda: self._op_log.insertPlainText(proc.readAllStandardError().data().decode("utf-8","ignore")))
+            def finished(code, status):
+                dlg.close()
+                on_done(code)
+            proc.finished.connect(finished)
+            proc.start()
+
+        def make_run(name, st_item):
+            def _run():
+                script = f"scripts/setup_venv_{name}.sh" if os.name != "nt" else f"scripts\\setup_venv_{name}.ps1"
+                if not os.path.exists(script):
+                    QMessageBox.warning(self, "Script missing", f"{script} not found."); return
+                st_item.setText("installing…"); self._op_log.clear(); self._op_log.show()
+                def done(code):
+                    # refresh status cell by validating
+                    ok, missing = validate(name) if name in EXPECTED else (is_created(name), [])
+                    st_item.setText("created" if ok else ("missing" if missing==["_venv_missing_"] else f"missing: {', '.join(missing)}"))
+                    QMessageBox.information(self, "Result",
+                        f"{name}: {'OK' if ok else 'Missing: ' + ', '.join(missing)}")
+                run_script(script, done)
+            return _run
+
+        def make_validate(name):
+            def _val():
+                ok, missing = validate(name) if name in EXPECTED else (is_created(name), [])
+                if ok: QMessageBox.information(self, "Validate", f"{name}: OK")
+                else:
+                    if missing==["_venv_missing_"]: QMessageBox.warning(self,"Validate",f"{name}: venv not created yet.")
+                    else: QMessageBox.warning(self,"Validate",f"{name}: missing imports: {', '.join(missing)}")
+            return _val
+
+        def make_details(name):
+            def _det():
+                info = details(name)
+                txt = []
+                for mod, d in info.items():
+                    if d.get("ok"):
+                        ver = d.get("version") or "(version unknown)"
+                        txt.append(f"✔ {mod}  —  {ver}")
+                    else:
+                        txt.append(f"✖ {mod}  —  {d.get('error','import failed')}")
+                if not txt:
+                    txt = ["(no modules defined for this venv)"]
+                dlg = _TextDialog(f"{name} — Import details", "\n".join(txt), self)
+                dlg.exec()
+            return _det
 
         for row, name in enumerate(names):
             table.setItem(row, 0, QTableWidgetItem(name))
-            st_item = QTableWidgetItem("created" if is_created(name) else "missing")
-            table.setItem(row, 1, st_item)
+            ok, missing = validate(name) if name in EXPECTED else (is_created(name), [])
+            status = "created" if ok else ("missing" if missing==["_venv_missing_"] else f"missing: {', '.join(missing)}")
+            st_item = QTableWidgetItem(status); table.setItem(row, 1, st_item)
 
-            def make_run(n=name):
-                def _run():
-                    script = f"scripts/setup_venv_{n}.sh"
-                    if os.name == "nt": script = f"scripts\\setup_venv_{n}.ps1"
-                    if not os.path.exists(script):
-                        QMessageBox.warning(self, "Script missing", f"{script} not found."); return
-                    from subprocess import run, CalledProcessError
-                    try:
-                        if os.name=="nt": run(["powershell","-ExecutionPolicy","Bypass","-File",script], check=True)
-                        else: run(["bash", script], check=True)
-                        QMessageBox.information(self, "Done", f"{n} venv created/updated."); st_item.setText("created")
-                    except CalledProcessError:
-                        QMessageBox.critical(self,"Error",f"Script failed for {n}.")
-                return _run
+            btn_run = QPushButton("Create/Update"); btn_run.clicked.connect(make_run(name, st_item))
+            table.setCellWidget(row, 2, btn_run)
 
-            def make_val(n=name):
-                def _val():
-                    ok, missing = validate(n) if n in EXPECTED else (is_created(n), [] if is_created(n) else ["_venv_missing_"])
-                    if ok: QMessageBox.information(self, "Validate", f"{n}: OK")
-                    else:
-                        if missing==["_venv_missing_"]: QMessageBox.warning(self,"Validate",f"{n}: venv not created yet.")
-                        else: QMessageBox.warning(self,"Validate",f"{n}: missing imports: {', '.join(missing)}")
-                return _val
+            btn_val = QPushButton("Validate"); btn_val.clicked.connect(make_validate(name))
+            table.setCellWidget(row, 3, btn_val)
 
-            table.setCellWidget(row, 2, mk_btn("Create/Update", make_run()))
-            table.setCellWidget(row, 3, mk_btn("Validate", make_val()))
+            btn_det = QPushButton("Details"); btn_det.clicked.connect(make_details(name))
+            table.setCellWidget(row, 4, btn_det)
+
+            logbtn = QPushButton("Open Log"); logbtn.clicked.connect(lambda _=None: self._op_log.show())
+            table.setCellWidget(row, 5, logbtn)
 
         table.resizeColumnsToContents()
         lay.addWidget(table, 1)
+
+        # Bottom controls
+        bottom = QHBoxLayout()
+        btn_check_all = QPushButton("Check All")
+        btn_refresh = QPushButton("Refresh Status")
+        btn_check_all.clicked.connect(self._check_all_venvs)
+        btn_refresh.clicked.connect(self._refresh_runtime_status)
+        bottom.addWidget(btn_check_all); bottom.addStretch(1); bottom.addWidget(btn_refresh)
+        lay.addLayout(bottom)
+
+        lay.addWidget(self._op_log, 1)  # hidden until used
         return w
+    
+    
 
     # ---- Ollama ----
     def _ollama_tab(self) -> QWidget:
@@ -206,7 +275,7 @@ class MainWindow(QMainWindow):
         self.btn_send.clicked.connect(self._send_prompt)
         self.inp.keyPressEvent = self._prompt_keypress(self.inp.keyPressEvent)
 
-        self._refresh_server_state(); self._load_models(); self._load_conversations()
+        self._refresh_server_state(); self._refresh_tools_status(); self._load_models(); self._load_conversations()
         return w
 
     
@@ -350,7 +419,7 @@ class MainWindow(QMainWindow):
         else:
             ok, out = install_ollama_linux(Path("scripts") / "install_ollama.sh")
             QMessageBox.information(self, "Ollama", "Installer finished." if ok else f"Install failed:\n{out}")
-        self._refresh_server_state()
+        self._refresh_server_state(); self._refresh_tools_status()
 
     def _open_ollama_license(self):
         webbrowser.open("https://ollama.com")
@@ -396,3 +465,52 @@ class MainWindow(QMainWindow):
     def _app_data_dir(self):
         from app.core.paths import app_local_data_dir
         return app_local_data_dir()
+
+
+    def _refresh_runtime_status(self):
+        # Rescan registry and update venv table statuses
+        try:
+            from pathlib import Path
+            rescan_and_update(EXPECTED, Path(".").resolve())
+        except Exception:
+            pass
+        # Update table cells from local checks
+        table = getattr(self, "_venv_table", None)
+        if not table: return
+        for row in range(table.rowCount()):
+            name = table.item(row, 0).text()
+            st_item = table.item(row, 1)
+            if not st_item: continue
+            st_item.setText("created" if is_created(name) else "missing")
+
+    
+    def _refresh_tools_status(self):
+        # Update External Tools (Runtimes tab) label if it exists.
+        try:
+            from app.core.ollama_tools import which_ollama
+            label = getattr(self, "_lbl_ollama", None)
+            p = which_ollama()
+            if label is not None:
+                label.setText(f"Ollama: {'✅ ' + p if p else '❌ not found'}")
+        except Exception:
+            label = getattr(self, "_lbl_ollama", None)
+            if label is not None:
+                label.setText("Ollama: (error checking)")
+
+
+
+    def _check_all_venvs(self):
+        rows = getattr(self, "_venv_table", None).rowCount() if getattr(self, "_venv_table", None) else 0
+        lines = []
+        for r in range(rows):
+            name = self._venv_table.item(r, 0).text()
+            ok, missing = validate(name) if name in EXPECTED else (is_created(name), [])
+            if ok:
+                lines.append(f"{name}: OK")
+            else:
+                if missing==["_venv_missing_"]:
+                    lines.append(f"{name}: venv not created yet")
+                else:
+                    lines.append(f"{name}: missing imports: {', '.join(missing)}")
+        dlg = _TextDialog("Venv Check — Summary", "\n".join(lines) if lines else "(no rows)", self)
+        dlg.exec()

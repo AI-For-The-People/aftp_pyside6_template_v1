@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-proj_root="$(cd "$here/.." && pwd)"
-venv_dir="$proj_root/venvs"; mkdir -p "$venv_dir"
-name="llm_hf"; target="$venv_dir/$name"; python="${PYTHON:-python3}"
-$python -m venv "$target"; source "$target/bin/activate"
-python -m pip install --upgrade pip wheel setuptools
-python -m pip install --upgrade transformers accelerate safetensors
-python -m pip install --upgrade bitsandbytes optimum || true
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+venv="$here/venvs/llm_hf"
+py="${PYTHON:-python3}"
+
+echo "[AFTP] Creating venv: $venv"
+"$py" -m venv "$venv"
+"$venv/bin/python" -m pip install --upgrade pip setuptools wheel
+
+# --- packages ---
+"$venv/bin/python" -m pip install transformers accelerate safetensors
+
+echo "[AFTP] Installed into venv 'llm_hf'."
