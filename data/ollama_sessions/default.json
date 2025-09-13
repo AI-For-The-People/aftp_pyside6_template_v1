@@ -1,6 +1,6 @@
 {
   "name": "default",
-  "model": "(no models yet)",
+  "model": "(no server)",
   "messages": [
     {
       "role": "user",

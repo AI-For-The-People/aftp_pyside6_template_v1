@@ -54,7 +54,7 @@ class QuickLLMDialog(QDialog):
         self.out.clear()
         self.btn_ask.setEnabled(False)
         try:
-            ok, text = generate_once(model=model, prompt=prompt, timeout=120)
+            ok, text = generate_once(model, prompt, timeout=120)
             if ok:
                 self.out.setPlainText(text)
             else:

@@ -1,4 +1,5 @@
 {
+  "show_model_license_notice": true,
   "runtimes": {
     "core": "venvs/core",
     "ollama": "venvs/ollama",
@@ -11,5 +12,7 @@
     "tts": "venvs/tts",
     "mamba2": "venvs/mamba2"
   },
-  "show_licenses_on_start": false
+  "show_licenses_on_start": false,
+  "ollama_models_dir": "/home/aiforthepeople/.ollama",
+  "ollama_port": 11434
 }
