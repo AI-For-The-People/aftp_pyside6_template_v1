@@ -1,28 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Build a standalone executable using Nuitka.
-# Prereqs: python -m pip install nuitka ordered-set zstandard
-#          (On Linux: sudo apt-get install patchelf)
-# Recommended to run inside the 'core' venv.
-
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-proj="$(cd "$here/.." && pwd)"
-cd "$proj"
-
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$here"
 : "${PYTHON:=python3}"
-$PYTHON -m pip install --upgrade nuitka ordered-set zstandard
-
-# Nuitka plugin for PySide6 auto-includes Qt plugins.
-CMD=(
-  "$PYTHON" -m nuitka
-  --onefile
-  --enable-plugin=pyside6
-  --include-data-dir=app=app
-  --company-name="AI For The People"
-  --product-name="AFTP Template"
-  --output-filename="aftp_template"
-  app/main.py
-)
-echo "[AFTP] Running: ${CMD[*]}"
-"${CMD[@]}"
-echo "[AFTP] Built ./aftp_template"
+$PYTHON -m pip install -U nuitka orderedset zstandard || true
+# Change "app/main_entry.py" to your real entry when ready
+ENTRY="aftp_hub.py"
+if [ ! -f "$ENTRY" ]; then
+  # fallback: run the package
+  ENTRY="-m app"
+fi
+$PYTHON -m nuitka $ENTRY \
+  --onefile \
+  --standalone \
+  --enable-plugin=pyside6 \
+  --nofollow-import-to=tkinter,pytest \
+  --include-data-dir=app/assets=app/assets \
+  --remove-output
+echo "[AFTP] Nuitka build finished."

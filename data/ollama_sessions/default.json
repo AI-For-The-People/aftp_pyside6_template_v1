@@ -1,6 +1,6 @@
 {
   "name": "default",
-  "model": "deepseek-coder:6.7b-instruct",
+  "model": "(no models yet)",
   "messages": [
     {
       "role": "user",

@@ -141,3 +141,22 @@ def fetch_ollama_license_text(timeout: int = 10):
 
 def download_url() -> str:
     return "https://ollama.com/download"
+
+def generate_once(model: str, prompt: str, timeout: int = 60):
+    """
+    One-shot generation via Ollama REST (non-stream).
+    Returns (ok, text_or_error)
+    """
+    try:
+        import requests, json
+        url = "http://127.0.0.1:11434/api/generate"
+        resp = requests.post(url, json={"model": model, "prompt": prompt, "stream": False}, timeout=timeout)
+        if resp.status_code != 200:
+            return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+        data = resp.json()
+        # Expected: {"model": "...", "response": "...", ...}
+        if isinstance(data, dict) and "response" in data:
+            return True, data.get("response","")
+        return False, "Unexpected response format"
+    except Exception as e:
+        return False, str(e)

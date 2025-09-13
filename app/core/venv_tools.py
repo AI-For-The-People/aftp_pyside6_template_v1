@@ -46,6 +46,10 @@ EXPECTED: Dict[str, Dict[str, List[str]]] = {
         "pip":     ["openai-whisper"],
     },
     # Text-to-Speech (offline)
+    "ai_dev": {
+        "imports": ["torch", "transformers", "datasets", "accelerate", "peft", "trl"],
+        "pip":     ["torch", "transformers", "datasets", "accelerate", "peft", "trl"],
+    },
     "tts": {
         "imports": ["pyttsx3"],
         "pip":     ["pyttsx3"],

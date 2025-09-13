@@ -16,6 +16,12 @@ from app.core.ollama_tools import (
     which_ollama, install_ollama_linux, install_ollama_windows, license_url
 )
 from app.core.shortcuts import ActionSpec, attach_actions
+from app.core.command_palette import CommandPalette
+from app.core.plugins import discover_actions
+from app.ui.quick_model_dialog import QuickModelDialog
+from app.ui.diagnostics_dialog import DiagnosticsDialog
+from app.core.model_registry import list_models
+from app.ui.quick_llm_dialog import QuickLLMDialog
 from app.ui.command_palette import CommandPalette
 from app.ui.license_dialog import LicenseDialog
 from app.core.settings import load_config, save_config
@@ -127,7 +133,7 @@ class MainWindow(QMainWindow):
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self._venv_table = table
 
-        names = list(EXPECTED.keys()) + ["mamba2"]
+        names = sorted(EXPECTED.keys()) + ["mamba2"]
         table.setRowCount(len(names))
 
         self._op_log = QTextEdit(); self._op_log.setReadOnly(True); self._op_log.hide()
@@ -513,4 +519,29 @@ class MainWindow(QMainWindow):
                 else:
                     lines.append(f"{name}: missing imports: {', '.join(missing)}")
         dlg = _TextDialog("Venv Check — Summary", "\n".join(lines) if lines else "(no rows)", self)
+        dlg.exec()
+
+
+    def _action_quick_llm(self):
+        dlg = QuickLLMDialog(self)
+        dlg.exec()
+
+
+    def _action_palette(self):
+        # Core + plugin actions
+        base = [
+            ("Quick LLM…", self._action_quick_llm if hasattr(self, "_action_quick_llm") else lambda: None),
+            ("Quick Model…", self._action_quick_model),
+            ("Refresh Runtimes", self._refresh_runtime_status if hasattr(self, "_refresh_runtime_status") else lambda: None),
+            ("Toggle Dark/Light", self.theme.toggle if hasattr(self, "theme") else lambda: None),
+        ]
+        try:
+            plugin_actions = discover_actions()
+        except Exception:
+            plugin_actions = []
+        dlg = CommandPalette(base + plugin_actions, self)
+        dlg.exec()
+
+    def _action_quick_model(self):
+        dlg = QuickModelDialog(self)
         dlg.exec()
