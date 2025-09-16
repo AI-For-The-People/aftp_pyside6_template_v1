@@ -1,0 +1,514 @@
+from __future__ import annotations
+from pathlib import Path
+import os, webbrowser
+
+from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QTabWidget,
+    QPushButton, QHBoxLayout, QComboBox, QGroupBox, QFormLayout, QLineEdit,
+    QTableWidget, QTableWidgetItem, QMessageBox, QPlainTextEdit, QSplitter,
+    QAbstractItemView, QStatusBar, QMenuBar, QMenu, QTextEdit, QFileDialog, QProgressDialog, QDialog, QDialogButtonBox
+)
+
+# AFTP core bits (kept unchanged)
+from app.core.theme import ThemeManager, SCHEMES
+from app.core.venv_tools import EXPECTED, validate, details, is_created
+from app.core.runtime_registry import rescan_and_update
+from app.core.shortcuts import ActionSpec, attach_actions
+from app.core.command_palette import CommandPalette
+from app.core.settings import load_config, save_config
+
+# Ollama helpers (we assume these exist in your repo)
+from app.core.ollama_tools import (
+    prompt, prompt_stream_iter, server_ok,
+    list_models, list_conversations, load_conversation, save_conversation,
+    pull_model, delete_model, which_ollama,
+)
+
+# ---- small helper dialog
+class _TextDialog(QDialog):
+    def __init__(self, title: str, text: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title); self.resize(820, 600)
+        lay = QVBoxLayout(self)
+        view = QPlainTextEdit(self); view.setReadOnly(True); view.setPlainText(text)
+        lay.addWidget(view, 1)
+        btns = QDialogButtonBox(QDialogButtonBox.Close, self)
+        btns.rejected.connect(self.reject); btns.clicked.connect(self.close)
+        lay.addWidget(btns)
+
+class MainWindow(QMainWindow):
+    # --- streaming worker (runs OFF the UI thread)
+    class _StreamWorker(QObject):
+        chunk = Signal(str)
+        done = Signal(str)
+        error = Signal(str)
+        def __init__(self, model: str, prompt_text: str, config: dict|None):
+            super().__init__()
+            self.model, self.prompt_text, self.config = model, prompt_text, config
+        def run(self):
+            try:
+                acc = []
+                for piece in prompt_stream_iter(self.model, self.prompt_text, config=self.config, options={"num_predict":256}):
+                    acc.append(piece); self.chunk.emit(piece)
+                self.done.emit("".join(acc))
+            except Exception as e:
+                self.error.emit(str(e))
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("AI For The People — Hub")
+        self.resize(980, 700)
+
+        self.theme = ThemeManager(); self.theme.apply()
+        self.config = load_config()
+        self._conv_name = "default"
+        self._current_model: str|None = None
+
+        self._status = QStatusBar(self); self.setStatusBar(self._status)
+        self._build_menu()
+
+        # Tabs
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._overview_tab(), "Overview")
+        self.tabs.addTab(self._theme_tab(), "Theme")
+        self.tabs.addTab(self._runtimes_tab(), "Runtimes")
+        self.tabs.addTab(self._ollama_tab(), "Ollama")
+        self.setCentralWidget(self.tabs)
+
+        self._wire_shortcuts()
+        self._update_status()
+
+    # ---- Menus
+    def _build_menu(self):
+        bar = QMenuBar(self); self.setMenuBar(bar)
+        helpm: QMenu = bar.addMenu("&Help")
+        act_short = helpm.addAction("Shortcuts…"); act_short.setShortcut("F1")
+        act_short.triggered.connect(lambda: QMessageBox.information(self,"Shortcuts",
+            "Ctrl+K: Command Palette\nCtrl+O: Ollama tab\nCtrl+,: Theme\nCtrl+Enter: Send prompt"))
+        helpm.addSeparator()
+        helpm.addAction("Licenses & Notices").triggered.connect(lambda: QMessageBox.information(
+            self, "Licenses", "Ollama & model licenses: https://ollama.com/library\nSee project README for other notices.")
+        )
+
+    # ---- Overview
+    def _overview_tab(self) -> QWidget:
+        w = QWidget(); lay = QVBoxLayout(w)
+        t = QLabel("<b>Hub Template</b><br>Set theme and prepare runtimes; real apps reuse these.")
+        t.setWordWrap(True); lay.addWidget(t)
+        how = QLabel("• Theme → pick scheme.<br>• Runtimes → create/validate venvs.<br>• Ollama → switch models, manage, quick prompt.")
+        how.setWordWrap(True); lay.addWidget(how)
+        lay.addStretch(1); return w
+
+    # ---- Theme
+    def _theme_tab(self) -> QWidget:
+        w = QWidget(); lay = QVBoxLayout(w)
+        grp_mode = QGroupBox("Mode"); rlay = QHBoxLayout(grp_mode)
+        btn_dark = QPushButton("Dark"); btn_light = QPushButton("Light")
+        btn_dark.setCheckable(True); btn_light.setCheckable(True)
+        (btn_dark if self.theme.mode()=="dark" else btn_light).setChecked(True)
+        btn_dark.clicked.connect(lambda: (self.theme.set_mode("dark"), self._update_status()))
+        btn_light.clicked.connect(lambda: (self.theme.set_mode("light"), self._update_status()))
+        rlay.addWidget(btn_dark); rlay.addWidget(btn_light); rlay.addStretch(1)
+
+        grp_scheme = QGroupBox("Accent Scheme (two colors)")
+        s_lay = QHBoxLayout(grp_scheme); combo = QComboBox()
+        for s in SCHEMES: combo.addItem(s.name, s.key)
+        for i in range(combo.count()):
+            if combo.itemData(i)==self.theme._data.get("scheme","aftp_signature"):
+                combo.setCurrentIndex(i); break
+        combo.currentIndexChanged.connect(lambda i: self.theme.set_scheme(combo.itemData(i)))
+        s_lay.addWidget(combo); s_lay.addStretch(1)
+
+        grp_custom = QGroupBox("Custom Accent (optional)"); f = QFormLayout(grp_custom)
+        p1 = QLineEdit(); p2 = QLineEdit()
+        p1.setPlaceholderText("#RRGGBB primary"); p2.setPlaceholderText("#RRGGBB secondary")
+        btn_apply = QPushButton("Apply"); btn_clear = QPushButton("Clear")
+        btn_apply.clicked.connect(lambda: self.theme.set_custom_accent(p1.text().strip(), (p2.text() or "").strip() or None))
+        btn_clear.clicked.connect(self.theme.clear_custom_accent)
+        f.addRow("Primary", p1); f.addRow("Secondary", p2); f.addRow(btn_apply, btn_clear)
+
+        lay.addWidget(grp_mode); lay.addWidget(grp_scheme); lay.addWidget(grp_custom); lay.addStretch(1); return w
+
+    # ---- Runtimes
+    def _runtimes_tab(self) -> QWidget:
+        w = QWidget(); lay = QVBoxLayout(w)
+        desc = QLabel("Create/validate venvs. Progress/logs appear below.")
+        desc.setWordWrap(True); lay.addWidget(desc)
+
+        table = QTableWidget(0, 6)
+        table.setHorizontalHeaderLabels(["Name","Status","Create/Update","Validate","Details","Log"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.NoSelection)
+        self._venv_table = table
+
+        names = sorted(EXPECTED.keys())
+        table.setRowCount(len(names))
+        for row, name in enumerate(names):
+            table.setItem(row, 0, QTableWidgetItem(name))
+            ok, missing = validate(name)
+            status = "created" if ok else ("missing" if missing==["_venv_missing_"] else f"missing: {', '.join(missing)}")
+            table.setItem(row, 1, QTableWidgetItem(status))
+
+            def make_run(n=name):
+                def _run():
+                    script = f"scripts/setup_venv_{n}.sh" if os.name!="nt" else f"scripts\\setup_venv_{n}.ps1"
+                    if not os.path.exists(script):
+                        QMessageBox.warning(self, "Script missing", f"{script} not found."); return
+                    dlg = QProgressDialog("Installing…", "", 0, 0, self)
+                    dlg.setCancelButton(None); dlg.setWindowModality(Qt.ApplicationModal); dlg.show()
+                    rc = os.system(("bash " if os.name!="nt" else "powershell -ExecutionPolicy Bypass -File ") + script)
+                    dlg.close()
+                    ok2, miss2 = validate(n)
+                    table.setItem(row, 1, QTableWidgetItem("created" if ok2 else ("missing" if miss2==["_venv_missing_"] else f"missing: {', '.join(miss2)}")))
+                return _run
+            btn_run = QPushButton("Create/Update"); btn_run.clicked.connect(make_run()); table.setCellWidget(row, 2, btn_run)
+
+            btn_val = QPushButton("Validate"); btn_val.clicked.connect(lambda _=None, n=name: QMessageBox.information(self, "Validate", f"{n}: {'OK' if validate(n)[0] else 'Missing'}"))
+            table.setCellWidget(row, 3, btn_val)
+
+            def make_details(n=name):
+                def _det():
+                    info = details(n)
+                    lines = []
+                    for mod, d in info.items():
+                        if d.get("ok"):
+                            ver = d.get("version") or "(version unknown)"
+                            lines.append(f"✔ {mod} — {ver}")
+                        else:
+                            lines.append(f"✖ {mod} — {d.get('error','import failed')}")
+                    _TextDialog(f"{n} — Import details", "\n".join(lines) or "(no modules)", self).exec()
+                return _det
+            btn_det = QPushButton("Details"); btn_det.clicked.connect(make_details()); table.setCellWidget(row, 4, btn_det)
+
+            logbtn = QPushButton("Open Log"); logbtn.clicked.connect(lambda _=None: QMessageBox.information(self,"Log","Installer output shows in your terminal for this minimal build."))
+            table.setCellWidget(row, 5, logbtn)
+
+        table.resizeColumnsToContents()
+        lay.addWidget(table, 1)
+
+        bottom = QHBoxLayout()
+        btn_check = QPushButton("Check All"); btn_check.clicked.connect(self._check_all_venvs)
+        btn_refresh = QPushButton("Refresh Status"); btn_refresh.clicked.connect(self._refresh_runtime_status)
+        bottom.addWidget(btn_check); bottom.addStretch(1); bottom.addWidget(btn_refresh)
+        lay.addLayout(bottom)
+        return w
+
+    def _check_all_venvs(self):
+        lines = []
+        for r in range(self._venv_table.rowCount()):
+            name = self._venv_table.item(r, 0).text()
+            ok, missing = validate(name)
+            if ok: lines.append(f"{name}: OK")
+            else: lines.append(f"{name}: {'venv not created' if missing==['_venv_missing_'] else 'missing: ' + ', '.join(missing)}")
+        _TextDialog("Venv Check — Summary", "\n".join(lines), self).exec()
+
+    def _refresh_runtime_status(self):
+        try:
+            rescan_and_update(EXPECTED, Path(".").resolve())
+        except Exception:
+            pass
+        for row in range(self._venv_table.rowCount()):
+            name = self._venv_table.item(row, 0).text()
+            ok, missing = validate(name)
+            status = "created" if ok else ("missing" if missing==["_venv_missing_"] else f"missing: {', '.join(missing)}")
+            self._venv_table.setItem(row, 1, QTableWidgetItem(status))
+
+    # ---- Ollama
+    def _ollama_tab(self) -> QWidget:
+        w = QWidget(); outer = QVBoxLayout(w)
+
+        top1 = QHBoxLayout()
+        self.lbl_srv = QLabel("Server: (checking…)")
+        btn_loc = QPushButton("Locate/Install")
+        btn_lic = QPushButton("License (Website)")
+        top1.addWidget(self.lbl_srv); top1.addStretch(1); top1.addWidget(btn_loc); top1.addWidget(btn_lic)
+        outer.addLayout(top1)
+
+        # Models folder picker
+        row_dir = QHBoxLayout()
+        row_dir.addWidget(QLabel("Models dir:"))
+        self.lbl_models_dir = QLabel(self.config.get("ollama_models_dir", "(default ~/.ollama)"))
+        self.lbl_models_dir.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        btn_dir = QPushButton("Change…")
+        btn_start = QPushButton("Start Server with this folder")
+        btn_stop = QPushButton("Force Stop Server")
+        row_dir.addWidget(self.lbl_models_dir, 1)
+        row_dir.addWidget(btn_dir); row_dir.addWidget(btn_start); row_dir.addWidget(btn_stop)
+        outer.addLayout(row_dir)
+
+        # Port
+        row_port = QHBoxLayout()
+        row_port.addWidget(QLabel("Port:"))
+        self.edit_ollama_port = QLineEdit(self); self.edit_ollama_port.setFixedWidth(100)
+        self.edit_ollama_port.setText(str(self.config.get("ollama_port", 11434)))
+        row_port.addWidget(self.edit_ollama_port); row_port.addStretch(1)
+        outer.addLayout(row_port)
+
+        # Model/conv controls
+        top2 = QHBoxLayout()
+        self.cmb_model = QComboBox(); self.btn_refresh_models = QPushButton("↻"); self.btn_delete_model = QPushButton("Delete")
+        self.cmb_conv = QComboBox(); self.btn_new_conv = QPushButton("+")
+        top2.addWidget(QLabel("Model:")); top2.addWidget(self.cmb_model, 1); top2.addWidget(self.btn_refresh_models); top2.addWidget(self.btn_delete_model)
+        top2.addSpacing(12)
+        top2.addWidget(QLabel("Conversation:")); top2.addWidget(self.cmb_conv, 1); top2.addWidget(self.btn_new_conv)
+        outer.addLayout(top2)
+
+        # Advanced pull
+        adv = QHBoxLayout()
+        self.pull_edit = QLineEdit(); self.pull_edit.setPlaceholderText("Advanced: pull model (e.g., qwen2.5:7b)")
+        self.btn_pull = QPushButton("Pull"); adv.addWidget(self.pull_edit, 1); adv.addWidget(self.btn_pull)
+        outer.addLayout(adv)
+
+        # Prompt I/O
+        split = QSplitter(Qt.Vertical)
+        up = QWidget(); up_l = QVBoxLayout(up)
+        self.inp = QPlainTextEdit(); self.inp.setPlaceholderText("Type a quick prompt to the current model…")
+        row_opts = QHBoxLayout()
+        self.chk_stream = QCheckBox("Stream"); self.chk_stream.setChecked(True)
+        self.chk_md = QCheckBox("Markdown"); self.chk_md.setChecked(True)
+        self.btn_send = QPushButton("Send (Ctrl+Enter)")
+        row_opts.addWidget(self.chk_stream); row_opts.addWidget(self.chk_md); row_opts.addStretch(1); row_opts.addWidget(self.btn_send)
+        up_l.addWidget(self.inp, 1); up_l.addLayout(row_opts)
+
+        down = QWidget(); down_l = QVBoxLayout(down)
+        self.out = QTextEdit(); self.out.setReadOnly(True)
+        down_l.addWidget(self.out, 1)
+        split.addWidget(up); split.addWidget(down); outer.addWidget(split, 1)
+
+        # Wire buttons
+        btn_loc.clicked.connect(self._locate_or_install_ollama)
+        btn_lic.clicked.connect(lambda: webbrowser.open("https://ollama.com"))
+        btn_dir.clicked.connect(self._choose_ollama_dir)
+        btn_start.clicked.connect(self._start_ollama_with_dir)
+        btn_stop.clicked.connect(lambda _=None: (self._stop_ollama_server(True), self._refresh_server_state()))
+        self.btn_refresh_models.clicked.connect(self._load_models)
+        self.btn_delete_model.clicked.connect(self._delete_selected_model)
+        self.btn_new_conv.clicked.connect(self._new_conv)
+        self.cmb_model.currentIndexChanged.connect(lambda _: self._on_model_changed())
+        self.cmb_conv.currentIndexChanged.connect(lambda _: self._on_conv_changed())
+        self.btn_pull.clicked.connect(self._pull_now)
+        self.btn_send.clicked.connect(self._send_prompt)
+        self.inp.keyPressEvent = self._prompt_keypress(self.inp.keyPressEvent)
+
+        # Initial load
+        self._refresh_server_state(); self._load_models(); self._load_conversations()
+        return w
+
+    # ---- Ollama actions
+    def _send_prompt(self):
+        # server
+        ok = False
+        try: ok = server_ok(self.config)
+        except TypeError: ok = server_ok()
+        if not ok:
+            QMessageBox.warning(self, "Ollama", "Server not reachable at 127.0.0.1:11434"); return
+        # model
+        model = (self._current_model or self.cmb_model.currentText() or "").strip()
+        if not model or model.startswith("("):
+            QMessageBox.information(self, "Ollama", "Pick a model first."); return
+        # text
+        text = (self.inp.toPlainText() or "").strip()
+        if not text: return
+
+        # clear output area
+        self._render_reply_markdown("")
+
+        # save user msg immediately
+        data = load_conversation(self._conv_name)
+        msgs = data.get("messages", []); msgs.append({"role":"user","content":text})
+        data["messages"] = msgs; data["model"] = model; save_conversation(self._conv_name, data)
+
+        self.btn_send.setEnabled(False)
+        if self.chk_stream.isChecked():
+            # stream in a background thread
+            self._th = QThread(self); self._wk = MainWindow._StreamWorker(model, text, self.config)
+            self._wk.moveToThread(self._th)
+            self._th.started.connect(self._wk.run)
+            self._wk.chunk.connect(self._append_reply_markdown)
+            def _done(final_text: str):
+                d = load_conversation(self._conv_name)
+                d.setdefault("messages", []).append({"role":"assistant","content":final_text})
+                save_conversation(self._conv_name, d)
+                self.btn_send.setEnabled(True); self._th.quit(); self._th.wait(200)
+            def _err(msg: str):
+                self._append_reply_markdown(f"\n\n[error] {msg}")
+                self.btn_send.setEnabled(True); self._th.quit(); self._th.wait(200)
+            self._wk.done.connect(_done); self._wk.error.connect(_err); self._th.start()
+        else:
+            ok, resp = prompt(model, text, config=self.config, options={"num_predict":256}, stream=False)
+            self._render_reply_markdown(resp if ok else f"[error] {resp}")
+            d = load_conversation(self._conv_name)
+            d.setdefault("messages", []).append({"role":"assistant","content": (resp if ok else f"[error] {resp}")})
+            save_conversation(self._conv_name, d)
+            self.btn_send.setEnabled(True)
+
+    def _render_reply_markdown(self, text: str):
+        if self.chk_md.isChecked():
+            try: self.out.setMarkdown(text); return
+            except Exception: pass
+        self.out.setPlainText(text)
+
+    def _append_reply_markdown(self, piece: str):
+        cur = self.out.toMarkdown() if self.chk_md.isChecked() else self.out.toPlainText()
+        self._render_reply_markdown((cur or "") + (piece or ""))
+
+    def _refresh_server_state(self):
+        ok = server_ok(self.config)
+        self.lbl_srv.setText("Server: ✅ running" if ok else "Server: ❌ not reachable (127.0.0.1:11434)")
+        self.cmb_model.setEnabled(ok); self.cmb_conv.setEnabled(ok)
+        self.btn_refresh_models.setEnabled(ok); self.btn_pull.setEnabled(ok); self.btn_send.setEnabled(ok); self.btn_delete_model.setEnabled(ok)
+        self._update_status()
+
+    def _load_models(self):
+        self.cmb_model.clear()
+        if not server_ok(self.config): self.cmb_model.addItem("(no server)"); return
+        models = list_models(self.config)
+        if not models: self.cmb_model.addItem("(no models yet)")
+        else:
+            for m in models: self.cmb_model.addItem(m)
+        if self._current_model is None and models:
+            self._current_model = models[0]
+        self._update_status()
+
+    def _delete_selected_model(self):
+        name = self.cmb_model.currentText().strip()
+        if not name or name.startswith("("):
+            QMessageBox.information(self,"Delete","Pick a model to delete."); return
+        if QMessageBox.question(self,"Delete model",f"Delete '{name}' from Ollama? This cannot be undone.") != QMessageBox.Yes:
+            return
+        ok, msg = delete_model(name)
+        QMessageBox.information(self, "Delete", f"{'Deleted' if ok else 'Failed'}: {msg}")
+        self._load_models()
+
+    def _load_conversations(self):
+        names = list_conversations() or ["default"]
+        self.cmb_conv.clear()
+        for n in names: self.cmb_conv.addItem(n)
+        # keep current conv if possible
+        wanted = getattr(self, "_conv_name", "default")
+        for i in range(self.cmb_conv.count()):
+            if self.cmb_conv.itemText(i) == wanted:
+                self.cmb_conv.setCurrentIndex(i); break
+        self._update_status()
+
+    def _new_conv(self):
+        i = 1
+        while True:
+            nm = f"conv_{i}"
+            if nm not in list_conversations(): break
+            i += 1
+        self._conv_name = nm
+        save_conversation(nm, {"id": nm, "model": self._current_model, "messages": []})
+        self._load_conversations()
+
+    def _on_model_changed(self):
+        self._current_model = self.cmb_model.currentText()
+        d = load_conversation(self._conv_name); d["model"] = self._current_model; save_conversation(self._conv_name, d)
+        self._update_status()
+
+    def _on_conv_changed(self):
+        self._conv_name = self.cmb_conv.currentText()
+        d = load_conversation(self._conv_name)
+        if d.get("model"): self._current_model = d["model"]
+        self._update_status()
+
+    def _pull_now(self):
+        name = self.pull_edit.text().strip()
+        if not name: return
+        # one-time notice handled elsewhere in your build; we keep it minimal
+        ok, msg = pull_model(name)
+        QMessageBox.information(self, "Pull", f"{'OK' if ok else 'Failed'}: {msg}")
+        self._load_models()
+
+    def _choose_ollama_dir(self):
+        start = self.config.get("ollama_models_dir", str(Path.home() / ".ollama"))
+        path = QFileDialog.getExistingDirectory(self, "Select Ollama models folder", start)
+        if not path: return
+        self.config["ollama_models_dir"] = path; save_config(self.config)
+        self.lbl_models_dir.setText(path)
+        QMessageBox.information(self, "Ollama", "Models folder saved. Restart the server via 'Start Server with this folder' to apply.")
+
+    def _start_ollama_with_dir(self):
+        # Stop existing (best effort, will not touch your terminal)
+        self._stop_ollama_server(True)
+        folder = self.config.get("ollama_models_dir")
+        try: port = int(self.edit_ollama_port.text())
+        except Exception: port = 11434
+        self.config["ollama_port"] = port; save_config(self.config)
+
+        env = os.environ.copy(); env["OLLAMA_HOST"] = f"127.0.0.1:{port}"
+        if folder:
+            try:
+                Path(folder).mkdir(parents=True, exist_ok=True)
+                if os.access(folder, os.W_OK):
+                    env["OLLAMA_MODELS"] = folder
+                else:
+                    QMessageBox.warning(self, "Ollama", f"Models folder not writable: {folder}. Using default (~/.ollama).")
+            except Exception as e:
+                QMessageBox.warning(self, "Ollama", f"Could not prepare models folder:\n{e}\nUsing default (~/.ollama).")
+
+        # start detached; do NOT stream server output into the UI (prevents runaway logs)
+        from PySide6.QtCore import QProcess
+        proc = QProcess(self)
+        proc.setProgram("ollama"); proc.setArguments(["serve"])
+        proc.setProcessChannelMode(QProcess.SeparateChannels)
+        proc.setEnvironment([f"{k}={v}" for k,v in env.items()])
+        proc.start()
+        QTimer.singleShot(1250, self._refresh_server_state)
+        QMessageBox.information(self, "Ollama", f"Attempted to start server{(' with '+folder) if folder else ''}.")
+
+    def _stop_ollama_server(self, log_to_ui: bool = False) -> bool:
+        # gentle: avoid killing shells/terms; only target 'ollama serve'
+        try:
+            if not server_ok(self.config): return True
+        except Exception:
+            return True
+        if os.name != "nt":
+            os.system("pkill -f 'ollama serve' >/dev/null 2>&1")
+        else:
+            os.system("taskkill /IM ollama.exe /F >NUL 2>&1")
+        # wait a bit
+        for _ in range(10):
+            if not server_ok(self.config): return True
+            QTimer.singleShot(100, lambda: None)
+        return False
+
+    # ---- Shortcuts / palette / status
+    def _wire_shortcuts(self):
+        def show_theme(): self.tabs.setCurrentIndex(1)
+        def show_venvs(): self.tabs.setCurrentIndex(2)
+        def show_ollama(): self.tabs.setCurrentIndex(3)
+        def open_palette(): self._open_palette()
+        specs = [
+            ActionSpec("Open Command Palette", "Ctrl+K", open_palette),
+            ActionSpec("Theme / Settings", "Ctrl+,", show_theme),
+            ActionSpec("Runtimes", None, show_venvs),
+            ActionSpec("Ollama", "Ctrl+O", show_ollama),
+        ]
+        self._actions = attach_actions(self, specs)
+
+        # Ctrl+Enter in the prompt
+        def _kp(super_impl):
+            def handler(evt):
+                if evt.key() in (Qt.Key_Return, Qt.Key_Enter) and (evt.modifiers() & (Qt.ControlModifier | Qt.MetaModifier)):
+                    self._send_prompt(); return
+                return super_impl(evt)
+            return handler
+        # attached later once widgets exist
+
+    def _open_palette(self):
+        cmds = [
+            ("Theme / Settings", lambda: self.tabs.setCurrentIndex(1)),
+            ("Runtimes",       lambda: self.tabs.setCurrentIndex(2)),
+            ("Ollama",         lambda: self.tabs.setCurrentIndex(3)),
+        ]
+        CommandPalette(cmds, self).exec()
+
+    def _update_status(self):
+        srv = "Ollama:OK" if server_ok(self.config) else "Ollama:OFF"
+        model = self._current_model or "(none)"
+        conv = self._conv_name
+        self._status.showMessage(f"{srv} | Model: {model} | Conv: {conv} — Ctrl+O switch, Ctrl+K commands")
