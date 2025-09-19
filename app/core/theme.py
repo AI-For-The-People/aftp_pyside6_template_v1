@@ -1,126 +1,364 @@
+# app/core/theme.py
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Literal, Optional
-import json
-from PySide6.QtCore import QObject, Signal, QFileSystemWatcher
-from PySide6.QtGui import QColor, QPalette
+from typing import Dict, Optional
+from pathlib import Path
+import json, os, platform
+
+from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import QApplication
-from .paths import shared_theme_file, ensure_dirs
 
-Mode = Literal["dark","light"]
+# ---------- central config paths (shared by ALL AFTP apps) ----------
+def _config_dir() -> Path:
+    sys = platform.system()
+    if sys == "Windows":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
+        return base / "AFTP"
+    elif sys == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "AFTP"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        return base / "AFTP"
 
-@dataclass
-class Accent:
-    primary: str
-    secondary: str
+def _theme_file() -> Path:
+    d = _config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "theme.json"
 
-@dataclass
+# ---------- two-accent schemes ----------
+@dataclass(frozen=True)
 class Scheme:
     key: str
     name: str
-    dark: Accent
-    light: Accent
+    primary: str    # hex
+    secondary: str  # hex
 
 SCHEMES = [
-    Scheme(
-        key="aftp_signature",
-        name="AFTP Signature",
-        dark=Accent(primary="#8A1A1A", secondary="#B1911F"),
-        light=Accent(primary="#D64545", secondary="#D8B455"),
-    ),
-    Scheme(
-        key="blue_steel",
-        name="Blue Steel",
-        dark=Accent(primary="#1E4D7A", secondary="#A9B2BA"),
-        light=Accent(primary="#2E6EA8", secondary="#C9D1D9"),
-    ),
-    Scheme(
-        key="verdant_bronze",
-        name="Verdant Bronze",
-        dark=Accent(primary="#1F5E3A", secondary="#A86F32"),
-        light=Accent(primary="#2F8E58", secondary="#CD8740"),
-    ),
+    Scheme("aftp_signature", "AFTP Signature (Red/Gold)",
+           primary="#B5182A", secondary="#C6A23A"),
+    Scheme("steel_cobalt", "Steel & Cobalt (Silver/Blue)",
+           primary="#64778C", secondary="#2F64C0"),
+    Scheme("verdigris_bronze", "Verdigris & Bronze (Green/Bronze)",
+           primary="#198F7A", secondary="#8C6239"),
 ]
+SCHEMES_BY_KEY: Dict[str, Scheme] = {s.key: s for s in SCHEMES}
 
-DEFAULT = {"mode": "dark", "scheme": "aftp_signature", "custom_accent": None}
+DEFAULT_MODE = "dark"
+DEFAULT_SCHEME_KEY = "aftp_signature"
 
-def scheme_by_key(key: str) -> Scheme:
-    for s in SCHEMES:
-        if s.key == key: return s
-    return SCHEMES[0]
-
-class ThemeManager(QObject):
-    changed = Signal()
+class ThemeManager:
+    """
+    One theme for the whole ecosystem.
+    - Persists to ~/.config/AFTP/theme.json (or OS equivalent).
+    - Applies tuned QPalette + QSS that USES BOTH accent colors widely.
+    - Supports custom per-user accents (primary/secondary).
+    """
     def __init__(self):
-        super().__init__()
-        ensure_dirs()
-        self.file = shared_theme_file()
-        self.watcher = QFileSystemWatcher([str(self.file)]) if self.file.exists() else QFileSystemWatcher()
-        if self.file.exists(): self.watcher.addPath(str(self.file))
-        self.watcher.fileChanged.connect(self._on_external_change)
-        self._data = self._load()
+        self._data = self._load_or_default()
 
-    def _load(self) -> dict:
-        try:
-            return {**DEFAULT, **json.load(open(self.file, "r", encoding="utf-8"))}
-        except Exception:
-            return DEFAULT.copy()
+    # ---- public API ----
+    def mode(self) -> str:
+        return self._data.get("mode", DEFAULT_MODE)
 
-    def save(self):
-        self.file.parent.mkdir(parents=True, exist_ok=True)
-        json.dump(self._data, open(self.file, "w", encoding="utf-8"), indent=2)
-        self.changed.emit()
-
-    def _on_external_change(self, *_):
-        self._data = self._load()
+    def set_mode(self, mode: str):
+        self._data["mode"] = "dark" if mode not in ("dark", "light") else mode
+        self._save()
         self.apply()
 
-    def mode(self) -> Mode:
-        return self._data.get("mode","dark")  # type: ignore
-
-    def set_mode(self, mode: Mode):
-        self._data["mode"] = mode; self.save(); self.apply()
+    def toggle(self):
+        self.set_mode("light" if self.mode() == "dark" else "dark")
 
     def set_scheme(self, key: str):
-        self._data["scheme"] = key; self.save(); self.apply()
+        if key not in SCHEMES_BY_KEY:
+            key = DEFAULT_SCHEME_KEY
+        self._data["scheme"] = key
+        self._save()
+        self.apply()
 
-    def set_custom_accent(self, primary: str, secondary: Optional[str]=None):
-        self._data["custom_accent"] = {"primary": primary, "secondary": secondary or primary}
-        self.save(); self.apply()
+    def set_custom_accent(self, primary_hex: str, secondary_hex: Optional[str] = None):
+        self._data["custom_primary"] = primary_hex
+        if secondary_hex:
+            self._data["custom_secondary"] = secondary_hex
+        self._save()
+        self.apply()
 
     def clear_custom_accent(self):
-        self._data["custom_accent"] = None; self.save(); self.apply()
-
-    def current_accent(self) -> Accent:
-        c = self._data.get("custom_accent")
-        if c: return Accent(primary=c["primary"], secondary=c.get("secondary", c["primary"]))
-        sch = scheme_by_key(self._data.get("scheme","aftp_signature"))
-        return sch.dark if self.mode()=="dark" else sch.light
+        self._data.pop("custom_primary", None)
+        self._data.pop("custom_secondary", None)
+        self._save()
+        self.apply()
 
     def apply(self):
-        acc = self.current_accent()
-        qss = f"""
-        QPushButton {{
-            border-radius: 8px; padding: 6px 10px; border: 1px solid rgba(0,0,0,0.15);
-        }}
-        QPushButton:hover {{ background: rgba(0,0,0,0.06); }}
-        QPushButton:pressed {{ background: rgba(0,0,0,0.12); }}
-        QTabBar::tab:selected {{ color: {acc.primary}; }}
-        QProgressBar::chunk {{ background-color: {acc.primary}; }}
-        QSlider::handle:horizontal {{ background: {acc.primary}; width: 16px; border-radius: 8px; }}
-        """
         app = QApplication.instance()
-        if not app: return
-        app.setStyleSheet(qss)
-        pal = app.palette()
-        if self.mode()=="dark":
-            pal.setColor(QPalette.ColorRole.Window, QColor("#121212"))
-            pal.setColor(QPalette.ColorRole.Base, QColor("#1a1a1a"))
-            pal.setColor(QPalette.ColorRole.Text, QColor("#e6e6e6"))
-            pal.setColor(QPalette.ColorRole.WindowText, QColor("#e6e6e6"))
-        else:
-            pal.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
-            pal.setColor(QPalette.ColorRole.Base, QColor("#f6f6f6"))
-            pal.setColor(QPalette.ColorRole.Text, QColor("#101010"))
-            pal.setColor(QPalette.ColorRole.WindowText, QColor("#101010"))
+        if app is None:
+            return
+
+        is_dark = self.mode() == "dark"
+        sch = SCHEMES_BY_KEY.get(self._data.get("scheme", DEFAULT_SCHEME_KEY), SCHEMES_BY_KEY[DEFAULT_SCHEME_KEY])
+        primary = self._data.get("custom_primary", sch.primary)
+        secondary = self._data.get("custom_secondary", sch.secondary)
+
+        pal = self._build_palette(is_dark)
         app.setPalette(pal)
+
+        qss = self._build_qss(is_dark, primary, secondary)
+        app.setStyleSheet(qss)
+
+    # ---- internals ----
+    def _load_or_default(self) -> Dict:
+        f = _theme_file()
+        if f.exists():
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                data.setdefault("mode", DEFAULT_MODE)
+                data.setdefault("scheme", DEFAULT_SCHEME_KEY)
+                return data
+            except Exception:
+                pass
+        data = {"mode": DEFAULT_MODE, "scheme": DEFAULT_SCHEME_KEY}
+        f.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return data
+
+    def _save(self):
+        try:
+            _theme_file().write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _build_palette(self, is_dark: bool) -> QPalette:
+        pal = QPalette()
+        if is_dark:
+            bg = QColor("#121212")
+            base = QColor("#181818")
+            panel = QColor("#151515")
+            text = QColor("#EDEDED")
+            muted = QColor("#B7B7B7")
+            highlight = QColor("#2F64C0")
+
+            pal.setColor(QPalette.Window, bg)
+            pal.setColor(QPalette.Base, base)
+            pal.setColor(QPalette.AlternateBase, panel)
+            pal.setColor(QPalette.Text, text)
+            pal.setColor(QPalette.WindowText, text)
+            pal.setColor(QPalette.Button, panel)
+            pal.setColor(QPalette.ButtonText, text)
+            pal.setColor(QPalette.PlaceholderText, muted)
+            pal.setColor(QPalette.Highlight, highlight)
+            pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+        else:
+            bg = QColor("#FFFFFF")
+            base = QColor("#FFFFFF")
+            panel = QColor("#F7F8F9")
+            text = QColor("#161616")
+            muted = QColor("#6A6A6A")
+            highlight = QColor("#2F64C0")
+
+            pal.setColor(QPalette.Window, bg)
+            pal.setColor(QPalette.Base, base)
+            pal.setColor(QPalette.AlternateBase, panel)
+            pal.setColor(QPalette.Text, text)
+            pal.setColor(QPalette.WindowText, text)
+            pal.setColor(QPalette.Button, QColor("#FFFFFF"))
+            pal.setColor(QPalette.ButtonText, text)
+            pal.setColor(QPalette.PlaceholderText, muted)
+            pal.setColor(QPalette.Highlight, highlight)
+            pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+        return pal
+
+    def _build_qss(self, is_dark: bool, primary: str, secondary: str) -> str:
+        # neutrals per mode
+        if is_dark:
+            pane = "#181818"
+            frame = "#222222"
+            border = "#2A2A2A"
+            text = "#EDEDED"
+            text_muted = "#B7B7B7"
+            input_bg = "#1E1E1E"
+            menu_bg = "#202020"
+            menu_sel = primary
+        else:
+            pane = "#FFFFFF"
+            frame = "#F2F4F6"
+            border = "#E1E4E8"
+            text = "#161616"
+            text_muted = "#6A6A6A"
+            input_bg = "#FFFFFF"
+            menu_bg = "#FFFFFF"
+            menu_sel = primary
+
+        # Helper: a subtle gradient using both accents for primary buttons
+        prim_grad = f"qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {primary}, stop:1 {secondary})"
+
+        return f"""
+        QWidget {{
+            color: {text};
+        }}
+
+        /* Selection & caret accents */
+        QTextEdit, QPlainTextEdit, QLineEdit {{
+            selection-background-color: {primary};
+            selection-color: #FFFFFF;
+            background: {input_bg};
+            border: 1px solid {border};
+            border-radius: 6px;
+            padding: 6px;
+        }}
+        QTextEdit:focus, QPlainTextEdit:focus, QLineEdit:focus {{
+            border: 2px solid {secondary};
+        }}
+        QComboBox {{
+            background: {input_bg};
+            border: 1px solid {border};
+            border-radius: 6px;
+            padding: 4px 8px;
+        }}
+        QComboBox:focus {{
+            border: 2px solid {secondary};
+        }}
+
+        /* Buttons (use BOTH colors) */
+        QPushButton {{
+            background: {frame};
+            border: 1px solid {border};
+            border-radius: 8px;
+            padding: 6px 12px;
+        }}
+        QPushButton[role="primary"] {{
+            background: {prim_grad};
+            color: #FFFFFF;
+            border: 1px solid {secondary};
+        }}
+        QPushButton:hover {{
+            border-color: {secondary};
+        }}
+        QPushButton:pressed {{
+            background: {pane};
+        }}
+
+        /* Tab bar: primary border; secondary title color */
+        QTabWidget::pane {{
+            border: 1px solid {border};
+            background: {pane};
+            border-radius: 8px;
+        }}
+        QTabBar::tab {{
+            background: {pane};
+            color: {text_muted};
+            padding: 7px 14px;
+            border: 1px solid {border};
+            border-bottom: none;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            margin-right: 2px;
+        }}
+        QTabBar::tab:selected {{
+            background: {frame};
+            border-color: {primary};
+            color: {secondary};
+        }}
+        QTabBar::tab:hover {{
+            color: {primary};
+        }}
+
+        /* Group boxes use secondary for title, primary for border */
+        QGroupBox {{
+            border: 1px solid {primary};
+            border-radius: 8px;
+            margin-top: 12px;
+            padding-top: 6px;
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 8px;
+            padding: 0 4px;
+            color: {secondary};
+        }}
+
+        /* Splitter: secondary handle, primary hover */
+        QSplitter::handle {{
+            background: {secondary};
+        }}
+        QSplitter::handle:hover {{
+            background: {primary};
+        }}
+
+        /* Progress bars and sliders */
+        QProgressBar {{
+            background: {frame};
+            border: 1px solid {border};
+            border-radius: 6px;
+            text-align: center;
+        }}
+        QProgressBar::chunk {{
+            background-color: {primary};
+            border-radius: 6px;
+        }}
+        QSlider::groove:horizontal {{
+            background: {border};
+            height: 6px;
+            border-radius: 3px;
+        }}
+        QSlider::handle:horizontal {{
+            background: {secondary};
+            width: 14px;
+            margin: -4px 0;
+            border-radius: 7px;
+        }}
+
+        /* Menus: primary highlight, secondary text on hover */
+        QMenu {{
+            background: {menu_bg};
+            border: 1px solid {border};
+        }}
+        QMenu::item:selected {{
+            background: {menu_sel};
+            color: #FFFFFF;
+        }}
+        QMenuBar::item:selected {{
+            background: {menu_sel};
+            color: #FFFFFF;
+        }}
+
+        /* Status bar & tooltips */
+        QStatusBar {{
+            color: {secondary};
+        }}
+        QToolTip {{
+            background: #FFFFE1;
+            color: #111;
+            border: 1px solid {primary};
+        }}
+
+        /* Checkboxes / Radios */
+        QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+            background: {primary};
+            border: 1px solid {secondary};
+        }}
+        QCheckBox::indicator:unchecked, QRadioButton::indicator:unchecked {{
+            background: {frame};
+            border: 1px solid {border};
+        }}
+
+        /* Table headers use both accents */
+        QHeaderView::section {{
+            background: {frame};
+            color: {secondary};
+            border: 1px solid {border};
+            padding: 4px 8px;
+        }}
+
+        /* Scrollbars lightly accented */
+        QScrollBar:vertical, QScrollBar:horizontal {{
+            background: {pane};
+            border: 1px solid {border};
+        }}
+        QScrollBar::handle {{
+            background: {secondary};
+            border-radius: 6px;
+        }}
+        QScrollBar::handle:hover {{
+            background: {primary};
+        }}
+        """
+# Back-compat export name used in older code
+DEFAULT_SCHEMES = SCHEMES

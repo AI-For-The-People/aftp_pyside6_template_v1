@@ -121,7 +121,7 @@ class MainWindow(QMainWindow):
 
         # Tools
         toolsm: QMenu = bar.addMenu("&Tools")
-        act_diag = QAction("Diagnostics…", self)
+        act_diag = QAction("Diagnostics…")
         act_diag.triggered.connect(lambda: DiagnosticsDialog(self).exec())
         toolsm.addAction(act_diag)
 
