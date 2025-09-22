@@ -35,6 +35,8 @@ If you add more third-party tools in derived apps, keep the same pattern:
 
 ## 🚀 Quick Start
 
+### Linux / macOS
+Open terminal and run
 ```bash
 # from the project root
 # Create the core venv
@@ -45,6 +47,8 @@ source venvs/core/bin/activate
 python3 -m app
 ```
 
+### Windows
+Open Powershell and run
 ```powershell
 # from the project root
 .\scripts\run.ps1
@@ -180,3 +184,34 @@ Insert between **View** and **Tools**:
 - **Left** = most common universal actions (start work).  
 - **Middle** = domain-specific tasks (compile, navigate).  
 - **Right** = utilities, system info, help (meta actions).\n
+
+Domain-specific menus go **between View and Tools**:
+- IDEs: `Run / Compile`
+- Browsers: `Navigate`
+- Editors: `Insert / Format`
+
+---
+
+## Ecosystem Roadmap
+
+- GPU auto-detect + correct wheels  
+- Shared model/data cache across apps  
+- Build scripts (`build_nuitka.sh/.ps1`)  
+- Auto-update system  
+- Plugin framework  
+- CI/CD (GitHub Actions)  
+- License surfacing for bundled tools  
+- Theme sync & IPC across apps  
+
+---
+
+## Building Your Own App
+
+1. Copy this repo → new folder.  
+2. Replace `MainWindow` tabs with your app’s UI.  
+3. Keep:
+   - **Theme manager** (so colors stay unified).  
+   - **Runtimes tab** (so all apps share venvs).  
+   - **Shortcuts & menu order** (consistency).  
+4. Add your features under `app/ui/…` and `app/core/…`.  
+5. Package with Nuitka / PyInstaller later (Hub is source-first).  
