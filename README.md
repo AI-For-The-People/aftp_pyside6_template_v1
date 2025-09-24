@@ -53,7 +53,7 @@ Open Powershell and run
 # from the project root
 .\scripts\run.ps1
 ```
-\n\n## Shared Runtimes (One Set, Many Apps)
+## Shared Runtimes (One Set, Many Apps)
 
 **Goal:** avoid N venvs for N apps. The AFTP Hub creates a **small set of purpose-based runtimes** (venvs) that **all AFTP apps reuse**.
 
@@ -78,7 +78,7 @@ Apps read this file to know what runtimes/tools exist and where they are.
     ocr_vision/     # pytesseract + opencv-python-headless + Pillow
     stt/            # whisper
     tts/            # pyttsx3
-ai_dev/         # build your own AIs (torch, transformers, datasets, accelerate, peft, trl)
+	ai_dev/         # build your own AIs (torch, transformers, datasets, accelerate, peft, trl)
 
 ### How an app uses them
 Apps **don’t activate** these venvs. They **spawn** the venv’s Python:
