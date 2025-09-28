@@ -1,129 +1,101 @@
 from __future__ import annotations
-import json, os, subprocess, sys
+import os, subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple
+from .paths import venvs_dir
 
-# ---- VENV DEFINITIONS (what we expect to be importable; pip names for installers) ----
 EXPECTED: Dict[str, Dict[str, List[str]]] = {
-    # minimal GUI runtime
-    "core": {
-        "imports": ["PySide6", "requests"],
-        "pip":     ["PySide6", "requests"],
-    },
-    # Python client for Ollama (not the server)
-    "ollama": {
-        "imports": ["ollama", "requests"],
-        "pip":     ["ollama", "requests"],
-    },
-    # Hugging Face Transformers (non-Ollama LLMs)
-    "llm_hf": {
-        "imports": ["transformers", "accelerate", "safetensors"],
-        "pip":     ["transformers", "accelerate", "safetensors"],
-    },
-    # Image generation / diffusion
-    "image": {
-        "imports": ["diffusers", "torch"],
-        "pip":     ["diffusers", "torch"],
-    },
-    # Embeddings / semantic search
-    "embeddings": {
-        "imports": ["sentence_transformers", "faiss"],
-        "pip":     ["sentence-transformers", "faiss-cpu"],
-    },
-    # Indexer (crawl + parse)
-    "indexer": {
-        "imports": ["trafilatura", "bs4", "lxml"],
-        "pip":     ["trafilatura", "beautifulsoup4", "lxml"],
-    },
-    # OCR & Vision basics
-    "ocr_vision": {
-        "imports": ["pytesseract", "cv2", "PIL"],
-        "pip":     ["pytesseract", "opencv-python-headless", "Pillow"],
-    },
-    # Speech-to-Text
-    "stt": {
-        "imports": ["whisper"],
-        "pip":     ["openai-whisper"],
-    },
-    # Text-to-Speech (offline)
-    "ai_dev": {
-        "imports": ["torch", "transformers", "datasets", "accelerate", "peft", "trl"],
-        "pip":     ["torch", "transformers", "datasets", "accelerate", "peft", "trl"],
-    },
-    "tts": {
-        "imports": ["pyttsx3"],
-        "pip":     ["pyttsx3"],
-    },
+    "core":        {"imports": ["PySide6", "requests"], "pip": ["PySide6", "requests"]},
+    "ollama":      {"imports": ["ollama", "requests"], "pip": ["ollama", "requests"]},
+    "llm_hf":      {"imports": ["transformers", "accelerate", "safetensors"], "pip": ["transformers","accelerate","safetensors","requests"]},
+    "image":       {"imports": ["diffusers", "torch"], "pip": ["diffusers","torch","accelerate","safetensors","Pillow"]},
+    "embeddings":  {"imports": ["sentence_transformers", "faiss"], "pip": ["sentence-transformers","faiss-cpu"]},
+    "indexer":     {"imports": ["trafilatura", "bs4", "lxml"], "pip": ["trafilatura","beautifulsoup4","lxml"]},
+    "ocr_vision":  {"imports": ["pytesseract", "cv2", "PIL"], "pip": ["pytesseract","opencv-python-headless","Pillow"]},
+    "stt":         {"imports": ["whisper"], "pip": ["openai-whisper"]},
+    "tts":         {"imports": ["pyttsx3"], "pip": ["pyttsx3"]},
+    "ai_dev":      {"imports": ["torch","transformers","datasets","accelerate"], "pip": ["torch","transformers","datasets","accelerate","peft","trl"]},
 }
 
-# ---- PATH HELPERS ----
-def project_root() -> Path:
-    return Path(".").resolve()
+def _pybin(venv_name: str) -> Path:
+    base = venvs_dir() / venv_name
+    return base / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
 
-def venv_dir(name: str) -> Path:
-    return project_root() / "venvs" / name
+def is_created(venv_name: str) -> bool:
+    return _pybin(venv_name).exists()
 
-def venv_python(name: str) -> Path:
-    if os.name == "nt":
-        return venv_dir(name) / "Scripts" / "python.exe"
-    else:
-        return venv_dir(name) / "bin" / "python3"
-
-def is_created(name: str) -> bool:
-    return venv_python(name).exists()
-
-# ---- VALIDATION ----
-def _import_probe_code(mods: List[str]) -> str:
-    return (
-        "import importlib, json\n"
-        f"mods = {json.dumps(mods)}\n"
-        "out = {}\n"
-        "for m in mods:\n"
-        "    try:\n"
-        "        mod = importlib.import_module(m)\n"
-        "        ver = getattr(mod, '__version__', None)\n"
-        "        if ver is None:\n"
-        "            ver = getattr(getattr(mod, 'version', None), '__version__', None) or ''\n"
-        "        out[m] = {'ok': True, 'version': ver}\n"
-        "    except Exception as e:\n"
-        "        out[m] = {'ok': False, 'error': str(e)}\n"
-        "print(json.dumps(out))\n"
-    )
-
-def validate(name: str) -> Tuple[bool, List[str]]:
-    """
-    Try importing each expected module inside the venv's interpreter.
-    Returns (ok, missing_import_names). If venv missing, returns (False, ['_venv_missing_']).
-    """
-    if name not in EXPECTED:
-        return (is_created(name), [] if is_created(name) else ["_venv_missing_"])
-    if not is_created(name):
-        return (False, ["_venv_missing_"])
-
-    py = str(venv_python(name))
-    mods = EXPECTED[name]["imports"]
-    code = _import_probe_code(mods)
+def py_info(venv_name: str) -> str:
+    py = _pybin(venv_name)
+    if not py.exists(): return "(python missing)"
     try:
-        proc = subprocess.run([py, "-c", code], capture_output=True, text=True)
-        if proc.returncode != 0:
-            return (False, mods)
-        data = json.loads(proc.stdout.strip() or "{}")
-        missing = [k for k, v in data.items() if not v.get("ok")]
-        return (len(missing) == 0, missing)
-    except Exception:
-        return (False, mods)
-
-def details(name: str) -> Dict[str, Dict[str, str]]:
-    """
-    Return per-module info: { module: {ok: bool, version?: str, error?: str} }.
-    """
-    mods = EXPECTED.get(name, {}).get("imports", [])
-    if not is_created(name):
-        return {m: {"ok": False, "error": "venv not created"} for m in mods}
-    py = str(venv_python(name))
-    code = _import_probe_code(mods)
-    try:
-        proc = subprocess.run([py, "-c", code], capture_output=True, text=True)
-        return json.loads(proc.stdout.strip() or "{}")
+        r = subprocess.run([str(py), "-c", "import sys; print(sys.executable); print(sys.version)"],
+                           capture_output=True, text=True, check=False)
+        return (r.stdout or "").strip()
     except Exception as e:
-        return {m: {"ok": False, "error": f"runner failed: {e}"} for m in mods}
+        return f"(failed to run python: {e})"
+
+def _try_imports_verbose(py: Path, mods: List[str]) -> Tuple[bool, List[str], List[str]]:
+    missing: List[str] = []
+    reasons: List[str] = []
+    for m in mods:
+        code = (
+            "import importlib, traceback\n"
+            f"m='{m}'\n"
+            "try:\n"
+            "    importlib.import_module(m)\n"
+            "    print('OK:::{}'.format(m))\n"
+            "except Exception as e:\n"
+            "    print('MISS:::{}:::{}'.format(m, repr(e)))\n"
+        )
+        r = subprocess.run([str(py), "-c", code], capture_output=True, text=True)
+        for line in (r.stdout or "").splitlines():
+            if line.startswith("OK:::"):
+                continue
+            if line.startswith("MISS:::"):
+                parts = line.split(":::", 2)
+                mod = parts[1] if len(parts) > 1 else "unknown"
+                err = parts[2] if len(parts) > 2 else "import error"
+                missing.append(mod)
+                reasons.append(f"{mod}: {err}")
+    return (len(missing) == 0, missing, reasons)
+
+def validate(venv_name: str) -> Tuple[bool, List[str]]:
+    """Kept for existing callers; returns (ok, missing_imports)."""
+    if not is_created(venv_name):
+        return (False, ["_venv_missing_"])
+    req = EXPECTED.get(venv_name, {})
+    mods = req.get("imports", [])
+    if not mods:
+        return (True, [])
+    ok, missing, _ = _try_imports_verbose(_pybin(venv_name), mods)
+    return (ok, missing)
+
+def details(venv_name: str) -> Dict[str, dict]:
+    """Return per-module status with versions/reasons when possible."""
+    out: Dict[str, dict] = {}
+    py = _pybin(venv_name)
+    if not py.exists():
+        return out
+    req = EXPECTED.get(venv_name, {})
+    mods = req.get("imports", [])
+    ok, missing, reasons = _try_imports_verbose(py, mods)
+    reason_map = {r.split(':',1)[0]: r for r in reasons}
+    for m in mods:
+        info = {"ok": m not in missing}
+        if not info["ok"]:
+            info["error"] = reason_map.get(m, "import failed")
+        # best-effort version
+        try:
+            code = (
+                f"import importlib.metadata as im; "
+                f"print(im.version('{m}'))"
+            )
+            r = subprocess.run([str(py), "-c", code], capture_output=True, text=True)
+            v = (r.stdout or "").strip()
+            if v:
+                info["version"] = v
+        except Exception:
+            pass
+        out[m] = info
+    out["_python"] = {"exe": str(py), "info": py_info(venv_name)}
+    return out

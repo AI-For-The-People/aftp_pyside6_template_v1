@@ -1065,7 +1065,7 @@ class MainWindow(QMainWindow):
     # ================= Runtimes helpers =================
     def _refresh_runtime_status(self):
         try:
-            rescan_and_update(EXPECTED, Path(".").resolve())
+            rescan_and_update(EXPECTED)
         except Exception:
             pass
         table = getattr(self, "_venv_table", None)

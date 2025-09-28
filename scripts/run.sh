@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$here"
 
-venv="$here/venvs/core"
-if [ ! -x "$venv/bin/python3" ]; then
-  echo "[AFTP] Core venv missing — creating..."
-  bash scripts/setup_venv_core.sh
+case "$(uname -s)" in
+  Darwin) base="$HOME/Library/Application Support/AFTP" ;;
+  Linux)  base="$HOME/.local/share/AFTP" ;;
+  *)      base="$HOME/.local/share/AFTP" ;;
+esac
+venv="$base/venvs/core"
+py="$venv/bin/python3"
+
+if [[ ! -x "$py" ]]; then
+  "$(dirname "$0")/setup_venv_core.sh"
+fi
+if [[ ! -x "$py" ]]; then
+  echo "[AFTP] Core venv still missing at $venv" >&2; exit 1
 fi
 
-# Run without leaving you “inside” the venv
-"$venv/bin/python3" -m app
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+exec "$py" -m app

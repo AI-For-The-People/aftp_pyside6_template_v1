@@ -39,18 +39,18 @@ If you add more third-party tools in derived apps, keep the same pattern:
 Open terminal and run
 ```bash
 # from the project root
-# Create the core venv
+# Create the shared core venv under ~/.local/share/AFTP/venvs/core
 ./scripts/setup_venv_core.sh
-source venvs/core/bin/activate
 
-# Launch the hub
-python3 -m app
+# Launch the hub (this will always use the shared core venv)
+./scripts/run.sh
 ```
 
 ### Windows
 Open Powershell and run
 ```powershell
 # from the project root
+# This will create/use %APPDATA%\AFTP\venvs\core
 .\scripts\run.ps1
 ```
 ## Shared Runtimes (One Set, Many Apps)

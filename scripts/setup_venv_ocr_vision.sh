@@ -1,14 +1,3 @@
 #!/usr/bin/env bash
 set -euo pipefail
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-venv="$here/venvs/ocr_vision"
-py="${PYTHON:-python3}"
-
-echo "[AFTP] Creating venv: $venv"
-"$py" -m venv "$venv"
-"$venv/bin/python" -m pip install --upgrade pip setuptools wheel
-
-# --- packages ---
-"$venv/bin/python" -m pip install pytesseract opencv-python-headless Pillow
-
-echo "[AFTP] Installed into venv 'ocr_vision'."
+"$(dirname "$0")/_venv_common.sh" ocr_vision pytesseract opencv-python-headless Pillow
