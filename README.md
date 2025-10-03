@@ -215,3 +215,47 @@ Domain-specific menus go **between View and Tools**:
    - **Shortcuts & menu order** (consistency).  
 4. Add your features under `app/ui/…` and `app/core/…`.  
 5. Package with Nuitka / PyInstaller later (Hub is source-first).  
+
+
+## Centralized Layout (Shared Across All AFTP Apps)
+
+AFTP apps share one **settings file** and a set of **data directories** so everything stays consistent.
+
+### Config (user-editable)
+- **Linux:** `~/.config/AFTP/settings.json`
+- **Windows:** `%APPDATA%\AFTP\settings.json`
+- **macOS:** `~/Library/Preferences/AFTP/settings.json`
+
+Contains:
+- `theme.mode` / `theme.scheme` / `theme.custom`  
+- `ollama.host` / `ollama.port` / `ollama.models_dir` / `ollama.binary`  
+- `paths.venvs` / `paths.hf_home` / `paths.cache` / `paths.logs`  
+- `gpu.preference`, `proxies`, `privacy.telemetry_opt_in`, `licenses.notice_ack`
+
+### Data (managed by apps)
+- **Linux:** `~/.local/share/AFTP/…`
+- **Windows:** `%APPDATA%\AFTP\…`
+- **macOS:** `~/Library/Application Support/AFTP/…`
+
+Includes:
+- `venvs/` — shared virtualenvs (core, ollama, llm_hf, image, embeddings, …)  
+- `data/hf_cache/` — Hugging Face cache  
+- `conversations/` — optional shared chat histories  
+- `plugins/` & `presets/` — shared plugins and prompt/model presets  
+- `licenses/` — cached license texts or notices  
+- `runtime_registry.json` — machine-wide venv registry  
+- `logs/` — app/runtime logs
+
+> All AFTP apps should use `app/core/settings.py` and `app/core/paths.py` to read/write these locations.
+
+### Verifying your setup
+Run:
+```bash
+./scripts/aftp_selftest.sh
+```
+It checks:
+- folders and `settings.json` exist and are readable  
+- HuggingFace cache path is set  
+- shared venvs (core, etc.) are present and import expected modules  
+- Ollama host/port resolve; optional `/api/tags` ping if server is up  
+- writes a short report to `~/.local/share/AFTP/logs/selftest_*.log` (or OS equivalents)

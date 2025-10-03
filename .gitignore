@@ -8,6 +8,7 @@ __pycache__/
 *.dll
 *.egg-info/
 .eggs/
+*.spec
 .mypy_cache/
 .pytest_cache/
 .coverage
@@ -20,6 +21,8 @@ env/
 venvs/
 .vscode/
 .idea/
+.env
+.env.local
 
 # --- Build / dist / cache ---
 build/
@@ -44,6 +47,6 @@ Thumbs.db
 /data/raw/
 /checkpoints/
 
-logs/
-backups/
+/logs/
+/backups/
 

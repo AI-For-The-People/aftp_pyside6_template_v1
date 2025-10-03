@@ -1,8 +1,8 @@
 # app/core/ollama_tools.py
 from __future__ import annotations
-import os, json, shutil, subprocess, sys
+import os, sys, json, shutil, subprocess
 from pathlib import Path
-from typing import Dict, List, Tuple, Iterable, Optional
+from typing import Dict, List, Tuple, Iterable, Optional, Iterator
 import requests
 
 # ---------- Host/port helpers ----------
@@ -10,15 +10,18 @@ def _resolve_host_port(config: Dict | None = None) -> str:
     """
     Priority:
       1) config['ollama_host'] or config['OLLAMA_HOST']  (hostname[:port], no scheme)
+         + optional config['ollama_port'] to add :port when missing
       2) env OLLAMA_HOST (scheme stripped if present)
       3) 127.0.0.1:11434
-    If only hostname is provided, default port 11434 is added.
     """
     host: Optional[str] = None
     if isinstance(config, dict):
-        host = config.get("ollama_host") or config.get("OLLAMA_HOST")
-        port = config.get("ollama_port")
-        if host and port and ":" not in str(host):
+        host = (config.get("ollama_host")
+                or config.get("OLLAMA_HOST")
+                or config.get("ollama", {}).get("host"))
+        port = (config.get("ollama_port")
+                or config.get("ollama", {}).get("port"))
+        if host and (":" not in str(host)) and port:
             host = f"{host}:{port}"
     if not host:
         env = os.environ.get("OLLAMA_HOST", "")
@@ -55,12 +58,11 @@ def list_models(config: Dict | None = None) -> List[str]:
                 nm = it.get("name") or it.get("model")
                 if nm:
                     names.append(nm)
-        # unique preserving order
+        # unique, keep order
         seen, out = set(), []
         for n in names:
             if n not in seen:
-                seen.add(n)
-                out.append(n)
+                seen.add(n); out.append(n)
         return out
     except Exception:
         return []
@@ -76,7 +78,7 @@ def pull_model(name: str, config: Dict | None = None) -> Tuple[bool, str]:
 def delete_model(name: str, config: Dict | None = None) -> Tuple[bool, str]:
     url = _base_url(config) + "/api/delete"
     try:
-        # new API prefers DELETE; older builds accepted POST
+        # Newer servers prefer DELETE; older accepted POST
         r = requests.delete(url, json={"name": name}, timeout=30)
         if r.ok:
             return True, "deleted"
@@ -85,7 +87,7 @@ def delete_model(name: str, config: Dict | None = None) -> Tuple[bool, str]:
     except Exception as e:
         return False, str(e)
 
-# ---------- Prompt (generate) ----------
+# ---------- Prompt / generate ----------
 def _gen_payload(model: str, text: str, options: Optional[Dict]) -> Dict:
     payload = {"model": model, "prompt": text, "stream": True}
     if options:
@@ -95,10 +97,10 @@ def _gen_payload(model: str, text: str, options: Optional[Dict]) -> Dict:
 def prompt_stream_iter(model: str, text: str, *,
                        config: Dict | None = None,
                        options: Dict | None = None,
-                       timeout: float = 600.0) -> Iterable[str]:
+                       timeout: float = 600.0) -> Iterator[str]:
     """
-    Yields decoded text chunks; handles bytes/str safely and accepts both 'data:{json}'
-    and raw JSON lines (covers different Ollama versions).
+    Yields decoded text chunks from Ollama's /api/generate stream.
+    Handles both 'data: {json}' and raw JSON lines. Emits only text pieces.
     """
     url = _base_url(config) + "/api/generate"
     payload = _gen_payload(model, text, options)
@@ -107,15 +109,17 @@ def prompt_stream_iter(model: str, text: str, *,
         for raw in r.iter_lines(chunk_size=1024, decode_unicode=False):
             if not raw:
                 continue
+            # Some versions prefix with 'data:'
             if raw.startswith(b"data:"):
                 raw = raw[5:].strip()
             try:
                 obj = json.loads(raw.decode("utf-8", "replace"))
             except Exception:
-                # sometimes a plain text line can slip through
+                # If it's not JSON, just surface text
                 yield raw.decode("utf-8", "replace")
                 continue
             if "error" in obj:
+                # surface error inside the stream; UI will show it
                 yield f"\n[stream-error] {obj['error']}"
                 break
             piece = obj.get("response") or ""
@@ -130,8 +134,7 @@ def prompt(model: str, text: str, *,
            timeout: float = 600.0,
            stream: bool = False) -> Tuple[bool, str]:
     """
-    One-call entry: if stream=True, collects the stream and returns the full text.
-    Used by MainWindow._send_prompt (non-streamed) and Quick LLM dialog.
+    Non-streamed call to /api/generate (or collect the stream if stream=True).
     """
     if stream:
         try:
@@ -162,7 +165,7 @@ def generate_once(model: str,
                   options: Dict | None = None,
                   timeout: float = 600.0) -> Tuple[bool, str]:
     """
-    Alias that accepts either text=... or prompt=... (older code paths used 'prompt=').
+    Alias that accepts either text=... or prompt=... (older call sites used 'prompt=').
     """
     q = text if text is not None else (prompt or "")
     return prompt(model, q, config=config, options=options, timeout=timeout, stream=False)
@@ -238,4 +241,3 @@ def install_ollama_windows(script_path: Path | str) -> None:
 def license_url() -> str:
     # We now send users to the website instead of pinning a blob URL.
     return "https://ollama.com"
-
